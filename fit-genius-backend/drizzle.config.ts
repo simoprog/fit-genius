@@ -10,6 +10,7 @@ export default defineConfig({
     user: process.env.DB_USER || "fitgenius_user",
     password: process.env.DB_PASSWORD || "fitgenius_password123",
     database: process.env.DB_NAME || "fitgenius",
+    ssl: process.env.DB_SSL === "true" ? true : false,
   },
   verbose: true,
   strict: true,
