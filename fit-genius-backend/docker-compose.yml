@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: fitgenius
-      POSTGRES_USER: fitgenius_user
-      POSTGRES_PASSWORD: fitgenius_password123
+      POSTGRES_USER: simo
+      POSTGRES_PASSWORD: schweps123
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "5432:5432"
