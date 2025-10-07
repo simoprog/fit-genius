@@ -1,4 +1,4 @@
-import { drizzle } from "drizzle-orm/singlestore/driver";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { schema } from "../schema";
 
