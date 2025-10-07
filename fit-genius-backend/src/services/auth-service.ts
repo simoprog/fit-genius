@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { NewUser, UpsertUser, User } from "../types/users";
 import { users } from "../schema/users";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db/index";
 import { refreshTokens } from "../schema/refresh-tokens";
 
@@ -168,5 +168,119 @@ export const loginUser = async (credentials: {
       success: false,
       error: error.message || " Login failed",
     };
+  }
+};
+
+// Refresh access token
+export const refreshAccessToken = async (refreshTokenValue: string) => {
+  try {
+    if (!refreshTokenValue) {
+      throw new Error("Refresh token is required");
+    }
+
+    const storedToken = await db.query.refreshTokens.findFirst({
+      where: and(
+        eq(refreshTokens.token, refreshTokenValue),
+        eq(refreshTokens.isRevoked, false)
+      ),
+      with: {
+        user: true,
+      },
+    });
+
+    if (!storedToken) {
+      throw new Error("Invalid refresh token");
+    }
+    // Check if token is expired
+    if (new Date() > storedToken.expiresAt) {
+      // Revoke expired token
+      await db
+        .update(refreshTokens)
+        .set({ isRevoked: true })
+        .where(eq(refreshTokens.id, storedToken.id));
+
+      throw new Error("Refresh token expired");
+    }
+    // Generate new access token
+    const accessToken = await generateToken(storedToken.user);
+
+    return {
+      success: true,
+      accessToken,
+      message: "Token refreshed successfully",
+    };
+  } catch (error: any) {
+    console.log("Refresh token failed", error);
+    return {
+      success: false,
+      error: error.message || " Refresh token failed",
+    };
+  }
+};
+
+// Logout (revoke refresh token)
+export const logoutUser = async (refreshTokenValue) => {
+  try {
+    if (!refreshTokenValue) {
+      return {
+        success: true,
+        message: "Logged out successfully",
+      };
+    }
+
+    // Revoke refresh token
+    await db
+      .update(refreshTokens)
+      .set({ isRevoked: true })
+      .where(eq(refreshTokens.token, refreshTokenValue));
+
+    return {
+      success: true,
+      message: "Logged out successfully",
+    };
+  } catch (error) {
+    console.error("Logout error:", error);
+    return {
+      success: false,
+      error: "Logout failed",
+    };
+  }
+};
+
+// Verify JWT token (for middleware)
+export const verifyToken = async (token: string) => {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return {
+      success: true,
+      decoded,
+    };
+  } catch (error: any) {
+    console.log("Token verification failed", error);
+    return {
+      success: false,
+      error: error.message || " Token verification failed",
+    };
+  }
+};
+
+// Clean up expired refresh tokens (run periodically)
+export const cleanupExpiredTokens = async () => {
+  try {
+    const result = await db
+      .update(refreshTokens)
+      .set({ isRevoked: true })
+      .where(
+        and(
+          eq(refreshTokens.isRevoked, false)
+          // WHERE expires_at < NOW()
+        )
+      );
+
+    console.log(`Cleaned up expired refresh tokens: ${result.count}`);
+    return result.count;
+  } catch (error) {
+    console.error("Token cleanup error:", error);
+    return 0;
   }
 };
