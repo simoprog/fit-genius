@@ -5,7 +5,8 @@
   "main": "server.ts",
   "scripts": {
     "start": "node dist/server.js",
-    "dev": "nodemon --exec ts-node server.ts",
+    "dev": "nodemon --exec ts-node  server.ts",
+    "dev:debug": "nodemon --exec ts-node --inspect server.ts",
     "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -16,6 +17,7 @@
   "dependencies": {
     "ai": "^5.0.48",
     "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
     "drizzle-kit": "^0.31.4",
@@ -27,7 +29,10 @@
     "pg": "^8.16.3"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.9",
     "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.3"
+    "@types/express": "^5.0.3",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2"
   }
 }

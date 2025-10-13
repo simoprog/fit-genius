@@ -1,16 +1,16 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
-import { NewUser, UpsertUser, User } from "../types/users";
+import { UpsertUser } from "../types/users";
 import { users } from "../schema/users";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index";
 import { refreshTokens } from "../schema/refresh-tokens";
 
 // JWT config
-const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRATION = process.env.JWT_EXPIRATION;
-const REFRESH_TOKEN_EXPIRATION = process.env.REFRESH_TOKEN_EXPIRATION;
+const JWT_SECRET =
+  process.env.JWT_SECRET || "your-secret-key-change-in-production";
+const JWT_EXPIRATION = process.env.JWT_EXPIRATION || "15m";
 
 // Password validation rules
 const PASSWORD_MIN_LENGTH = 8;
@@ -18,14 +18,22 @@ const PASSWORD_REGEX =
   /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
 
 // Utility functions
-const hashPassword = async (password: string) => {
+const hashPassword = async (password: string): Promise<string> => {
   const saltRounds = 12;
   return await bcrypt.hash(password, saltRounds);
 };
-const comparePassword = async (password: string, hashedPassword: string) => {
+
+const comparePassword = async (
+  password: string,
+  hashedPassword: string
+): Promise<boolean> => {
   return await bcrypt.compare(password, hashedPassword);
 };
-const generateToken = async (user: User) => {
+
+const generateToken = (user: { id: string; email: string }): string => {
+  if (!JWT_SECRET) {
+    throw new Error("JWT_SECRET is not defined");
+  }
   return jwt.sign(
     {
       userId: user.id,
@@ -36,15 +44,17 @@ const generateToken = async (user: User) => {
     { expiresIn: JWT_EXPIRATION }
   );
 };
-const generateRefreshToken = () => {
+
+const generateRefreshToken = (): string => {
   return crypto.randomBytes(64).toString("hex");
 };
 
 // Validation functions
-export const validateEmail = (email) => {
+export const validateEmail = (email: string): boolean => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 };
+
 export const validatePassword = (password: string) => {
   const errors: string[] = [];
 
@@ -67,7 +77,6 @@ export const validatePassword = (password: string) => {
 };
 
 // Authentication functions
-
 export const registerUser = async (userData: UpsertUser) => {
   const { email, password, firstName, lastName } = userData;
 
@@ -77,7 +86,10 @@ export const registerUser = async (userData: UpsertUser) => {
       throw new Error("Email and password are required");
     }
 
-    if (!validateEmail(email)) {
+    // Trim and lowercase email
+    const cleanEmail = email.toLowerCase().trim();
+
+    if (!validateEmail(cleanEmail)) {
       throw new Error("Invalid email format");
     }
 
@@ -86,40 +98,66 @@ export const registerUser = async (userData: UpsertUser) => {
       throw new Error(passwordValidation.errors.join(". "));
     }
 
-    const existingUser = await db.query.users.findFirst({
-      where: eq(users.email, email),
-    });
-    if (existingUser) {
+    // Check if user already exists - FIXED QUERY
+    const existingUsers = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, cleanEmail))
+      .limit(1);
+
+    if (existingUsers.length > 0) {
       throw new Error("User already exists with this email");
     }
+
     const hashedPassword = await hashPassword(password);
+
+    // Insert new user
     const [newUser] = await db
       .insert(users)
       .values({
-        id: crypto.randomUUID(),
-        email,
+        email: cleanEmail,
         passwordHash: hashedPassword,
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
+        firstName: firstName?.trim() || null,
+        lastName: lastName?.trim() || null,
       })
       .returning();
-    const accessToken = await generateToken(newUser);
+
+    if (!newUser) {
+      throw new Error("Failed to create user");
+    }
+
+    const accessToken = generateToken(newUser);
     const refreshToken = generateRefreshToken();
 
     const expiresAt = new Date();
-    expiresAt.setTime(expiresAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    expiresAt.setTime(expiresAt.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
     await db.insert(refreshTokens).values({
       userId: newUser.id,
       token: refreshToken,
       expiresAt: expiresAt,
     });
-    return { success: true, user: newUser, accessToken, refreshToken };
+
+    // Return user without password hash
+    const userResponse = {
+      id: newUser.id,
+      email: newUser.email,
+      firstName: newUser.firstName,
+      lastName: newUser.lastName,
+      createdAt: newUser.createdAt,
+    };
+
+    return {
+      success: true,
+      user: userResponse,
+      accessToken,
+      refreshToken,
+    };
   } catch (error: any) {
-    console.log("Registration failed", error);
+    console.error("Registration failed:", error);
     return {
       success: false,
-      error: error.message || " Registration failed",
+      error: error.message || "Registration failed",
     };
   }
 };
@@ -137,20 +175,27 @@ export const loginUser = async (credentials: {
       throw new Error("Email and password are required");
     }
 
-    const user = await db.query.users.findFirst({
-      where: eq(users.email, email.toLocaleLowerCase()),
-    });
+    const cleanEmail = email.toLowerCase().trim();
 
-    if (!user) {
+    // Query user - FIXED QUERY
+    const foundUsers = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, cleanEmail))
+      .limit(1);
+
+    if (foundUsers.length === 0) {
       throw new Error("Invalid email or password");
     }
+
+    const user = foundUsers[0];
 
     const isPasswordValid = await comparePassword(password, user.passwordHash);
     if (!isPasswordValid) {
       throw new Error("Invalid email or password");
     }
 
-    const accessToken = await generateToken(user);
+    const accessToken = generateToken(user);
     const refreshToken = generateRefreshToken();
     const expiresAt = new Date();
     expiresAt.setTime(expiresAt.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
@@ -163,10 +208,10 @@ export const loginUser = async (credentials: {
 
     return { success: true, accessToken, refreshToken };
   } catch (error: any) {
-    console.log("Login failed", error);
+    console.error("Login failed:", error);
     return {
       success: false,
-      error: error.message || " Login failed",
+      error: error.message || "Login failed",
     };
   }
 };
@@ -178,19 +223,23 @@ export const refreshAccessToken = async (refreshTokenValue: string) => {
       throw new Error("Refresh token is required");
     }
 
-    const storedToken = await db.query.refreshTokens.findFirst({
-      where: and(
-        eq(refreshTokens.token, refreshTokenValue),
-        eq(refreshTokens.isRevoked, false)
-      ),
-      with: {
-        user: true,
-      },
-    });
+    const storedTokens = await db
+      .select()
+      .from(refreshTokens)
+      .where(
+        and(
+          eq(refreshTokens.token, refreshTokenValue),
+          eq(refreshTokens.isRevoked, false)
+        )
+      )
+      .limit(1);
 
-    if (!storedToken) {
+    if (storedTokens.length === 0) {
       throw new Error("Invalid refresh token");
     }
+
+    const storedToken = storedTokens[0];
+
     // Check if token is expired
     if (new Date() > storedToken.expiresAt) {
       // Revoke expired token
@@ -201,8 +250,20 @@ export const refreshAccessToken = async (refreshTokenValue: string) => {
 
       throw new Error("Refresh token expired");
     }
+
+    // Get user
+    const foundUsers = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, storedToken.userId))
+      .limit(1);
+
+    if (foundUsers.length === 0) {
+      throw new Error("User not found");
+    }
+
     // Generate new access token
-    const accessToken = await generateToken(storedToken.user);
+    const accessToken = generateToken(foundUsers[0]);
 
     return {
       success: true,
@@ -210,16 +271,16 @@ export const refreshAccessToken = async (refreshTokenValue: string) => {
       message: "Token refreshed successfully",
     };
   } catch (error: any) {
-    console.log("Refresh token failed", error);
+    console.error("Refresh token failed:", error);
     return {
       success: false,
-      error: error.message || " Refresh token failed",
+      error: error.message || "Refresh token failed",
     };
   }
 };
 
 // Logout (revoke refresh token)
-export const logoutUser = async (refreshTokenValue) => {
+export const logoutUser = async (refreshTokenValue: string | undefined) => {
   try {
     if (!refreshTokenValue) {
       return {
@@ -248,18 +309,21 @@ export const logoutUser = async (refreshTokenValue) => {
 };
 
 // Verify JWT token (for middleware)
-export const verifyToken = async (token: string) => {
+export const verifyToken = (token: string) => {
   try {
+    if (!JWT_SECRET) {
+      throw new Error("JWT_SECRET is not defined");
+    }
     const decoded = jwt.verify(token, JWT_SECRET);
     return {
       success: true,
       decoded,
     };
   } catch (error: any) {
-    console.log("Token verification failed", error);
+    console.error("Token verification failed:", error);
     return {
       success: false,
-      error: error.message || " Token verification failed",
+      error: error.message || "Token verification failed",
     };
   }
 };
@@ -267,20 +331,14 @@ export const verifyToken = async (token: string) => {
 // Clean up expired refresh tokens (run periodically)
 export const cleanupExpiredTokens = async () => {
   try {
-    const result = await db
+    const now = new Date();
+    await db
       .update(refreshTokens)
       .set({ isRevoked: true })
-      .where(
-        and(
-          eq(refreshTokens.isRevoked, false)
-          // WHERE expires_at < NOW()
-        )
-      );
+      .where(and(eq(refreshTokens.isRevoked, false)));
 
-    console.log(`Cleaned up expired refresh tokens: ${result.count}`);
-    return result.count;
+    console.log(`Cleaned up expired refresh tokens`);
   } catch (error) {
     console.error("Token cleanup error:", error);
-    return 0;
   }
 };

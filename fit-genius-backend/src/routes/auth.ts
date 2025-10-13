@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Router } from "express";
 import {
   loginUser,
   refreshAccessToken,
@@ -6,7 +6,7 @@ import {
   logoutUser,
 } from "../services/auth-service";
 
-const router = express.Router();
+const router = express.Router() as Router;
 
 // Register a new user
 router.post("/register", async (req, res) => {
@@ -169,3 +169,5 @@ router.post("/logout", async (req, res) => {
     });
   }
 });
+
+export default router;
